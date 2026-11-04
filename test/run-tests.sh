@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
-# Run the plugin's unit/smoke tests. The host test imports
-# @deepseek-ai/dsh-agent-presets, which resolves only against the installed
-# harness scope — a temporary symlink supplies it for the test run.
+# Unit tests have no dependency on a locally installed Harness.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-SCOPE=/home/jiangrui/.nvm/versions/node/v24.16.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai
-if [ ! -d "$SCOPE" ]; then
-  echo "harness scope not found at $SCOPE — point SCOPE in test/run-tests.sh at your dsh install" >&2
-  exit 1
+node --test test/host.test.mjs test/client.test.mjs
+if node --input-type=module -e "import('@deepseek-ai/dsh-client-ui-slots')" >/dev/null 2>&1; then
+  node test/slots.test.mjs
+else
+  echo 'SKIP: real SlotCore test (@deepseek-ai/dsh-client-ui-slots not installed)'
 fi
-
-mkdir -p node_modules
-ln -sfn "$SCOPE" node_modules/@deepseek-ai
-trap 'rm -rf node_modules' EXIT
-
-node test/host.test.mjs
-node test/slots.test.mjs
-node test/client.test.mjs
