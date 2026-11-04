@@ -3,12 +3,39 @@ import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { readFileSync } from 'node:fs'
 
-function makeClient({ result = { ok: true, value: { commandId: '1', result: { kind: 'success' } } }, running = false } = {}) {
-  const calls = { remote: [], seat: null, removed: [] }
+function makeClient({ result = { ok: true, value: { commandId: '1', result: { kind: 'success' } } }, running = false, language = 'zh' } = {}) {
+  const calls = { remote: [], seat: null, removed: [], localeNotifications: 0 }
+  let snapshot = { active: language, revision: 0 }
+  const listeners = new Set()
+  const names = {
+    zh: { Standard: '标准模式', Ptc: 'PTC 模式', Minimal: '极简模式', Cordis: '创造模式' },
+    en: { Standard: 'Standard mode', Ptc: 'PTC mode', Minimal: 'Minimal mode', Cordis: 'Creator mode' },
+  }
+  const locale = {
+    bind(ns) {
+      assert.equal(ns, 'settings.agentPreset')
+      return key => {
+        const match = /^preset(Standard|Ptc|Minimal|Cordis)(Name|Description)$/.exec(key)
+        if (!match) return key
+        return match[2] === 'Name' ? names[snapshot.active][match[1]] : 'Localized description (' + snapshot.active + ')'
+      }
+    },
+    resolveText(dict) { return dict[snapshot.active] ?? dict.en },
+    getSnapshot() { return snapshot },
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
+    setLocale(next) {
+      snapshot = { active: next, revision: snapshot.revision + 1 }
+      for (const listener of listeners) listener()
+    },
+  }
   let bundle
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }),
     useState: s => [s, () => {}],
+    useSyncExternalStore(subscribe, getSnapshot) {
+      if (!calls.localeDispose) calls.localeDispose = subscribe(() => { calls.localeNotifications++ })
+      return getSnapshot()
+    },
     useEffect: () => {},
     useRef: () => ({ current: null }),
   }
@@ -33,7 +60,7 @@ function makeClient({ result = { ok: true, value: { commandId: '1', result: { ki
     register(options, component) { calls.options = options; calls.component = component; return () => calls.removed.push('register') },
   }
   const ctx = {
-    get(k) { return k === 'remote' ? remote : k === 'slots' ? slots : undefined },
+    get(k) { return k === 'remote' ? remote : k === 'slots' ? slots : k === 'locale' ? locale : undefined },
     effect(fn) { const dispose = fn(); return () => dispose?.() },
   }
   const dispose = mod.apply(ctx)
@@ -45,7 +72,9 @@ function makeClient({ result = { ok: true, value: { commandId: '1', result: { ki
     if (pred(tree)) return tree
     for (const c of tree.children || []) { const hit = find(c, pred); if (hit) return hit }
   }
-  return { mod, calls, dispose, render, find }
+  const textOf = node => typeof node === 'string' ? node : !node || typeof node !== 'object'
+    ? '' : (node.children || []).map(textOf).join('')
+  return { mod, calls, dispose, render, find, textOf, setLocale: id => locale.setLocale(id) }
 }
 async function tick() { await new Promise(resolve => setImmediate(resolve)) }
 
@@ -54,7 +83,7 @@ test('rc5 slot and service bindings', () => {
   assert.equal(c.calls.seat, 'conversation.session.header.actions')
   assert.equal(c.calls.options.id, 'agent-preset')
   assert.equal(c.calls.options.priority, -10)
-  assert.deepEqual(Array.from(c.mod.inject), ['slots', 'remote', 'remote.agentPresets', 'remote.commands'])
+  assert.deepEqual(Array.from(c.mod.inject), ['slots', 'remote', 'remote.agentPresets', 'remote.commands', 'locale'])
   assert.ok(c.find(c.render(), e => e.props.className === 'dcm-trigger'))
   c.dispose()
   assert.ok(c.calls.removed.includes('inject'))
@@ -92,4 +121,32 @@ test('running turn disables choices', async () => {
   c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
   await tick()
   assert.equal(c.find(c.render(), e => e.props.role === 'menuitemradio').props.disabled, true)
+})
+
+test('DSH Chinese setting overrides English browser and caption is gone', async () => {
+  const c = makeClient({ language: 'zh' }) // sandbox navigator.language is en-US
+  const trigger = c.find(c.render(), e => e.props.className === 'dcm-trigger')
+  assert.match(c.textOf(trigger), /PTC 模式/)
+  trigger.props.onClick()
+  await tick()
+  const menu = c.find(c.render(), e => e.props.className === 'dcm-panel')
+  assert.match(c.textOf(menu), /对话模式/)
+  assert.match(c.textOf(menu), /标准模式/)
+  assert.match(c.textOf(menu), /创造模式/)
+  assert.equal(c.find(menu, e => e.props.className === 'dcm-caption'), undefined)
+  assert.doesNotMatch(c.textOf(menu), /Applies from the next turn|Tool calls made under the previous mode/)
+})
+
+test('changing DSH language updates open menu and confirmation', async () => {
+  const c = makeClient({ language: 'zh' })
+  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
+  await tick()
+  c.setLocale('en')
+  assert.ok(c.calls.localeNotifications > 0)
+  assert.match(c.textOf(c.render()), /PTC mode/)
+  assert.match(c.textOf(c.render()), /Conversation mode/)
+  const other = c.find(c.render(), e => e.props.role === 'menuitemradio' && e.props['aria-checked'] === false)
+  other.props.onClick()
+  assert.match(c.textOf(c.render()), /Switch conversation mode/)
+  assert.doesNotMatch(c.textOf(c.render()), /Tool calls made under the previous mode/)
 })
