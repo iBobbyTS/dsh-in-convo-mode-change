@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 function makeClient({ language = 'zh', running = false, result = { ok: true, value: { result: { kind: 'success' } } }, roster } = {}) {
   let bundle
   const calls = { commands: [], removed: [], localeChanges: 0 }
+  const events = new Map()
   let active = language
   let revision = 0
   const locales = new Set()
@@ -59,6 +60,12 @@ function makeClient({ language = 'zh', running = false, result = { ok: true, val
     throw new Error('Unexpected module ' + id)
   })
   const remotes = {
+    $on(name, callback) {
+      const listeners = events.get(name) ?? new Set()
+      listeners.add(callback)
+      events.set(name, listeners)
+      return () => { listeners.delete(callback); calls.removed.push(name) }
+    },
     agentPresets: { list: async () => ({ ok: true, value: { presets: roster ?? [
       { id: 'standard' }, { id: 'ptc' }, { id: 'minimal' }, { id: 'cordis' },
       { id: 'broken', broken: 'invalid' },
@@ -92,6 +99,7 @@ function makeClient({ language = 'zh', running = false, result = { ok: true, val
     : node === null || typeof node !== 'object' ? '' : (node.children || []).map(textOf).join('')
   return {
     client, calls, cleanup, Menu, Toast, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular,
+    emit(name, ...args) { for (const callback of events.get(name) ?? []) callback(...args) },
     menu: () => find(render(), node => node.type === Menu),
     toast: () => find(render(), node => node.type === Toast),
     textOf, setLocale: id => locale.switchTo(id),
@@ -133,14 +141,22 @@ test('selecting a mode immediately uses the original Host command without confir
   assert.equal(c.menu().props.open, false)
 })
 
-test('running turns disable native menu options and cannot switch', async () => {
-  const c = makeClient({ running: true })
+test('running turns accept a request and keep a visible pending target', async () => {
+  const c = makeClient({ running: true, result: {
+    ok: true, value: { result: { kind: 'success',
+      text: 'Queued preset switch to cordis until the Agent becomes idle.' } },
+  } })
   c.menu().props.anchor.props.onClick()
   await tick()
-  assert.ok(c.menu().props.items.every(item => item.disabled))
+  assert.ok(c.menu().props.items.every(item => !item.disabled))
   c.menu().props.onSelect('cordis')
   await tick()
-  assert.equal(c.calls.commands.length, 0)
+  assert.equal(c.calls.commands[0][1], '/convo-mode cordis')
+  assert.equal(c.menu().props.selectedId, 'ptc', 'the current preset is not misrepresented')
+  assert.match(c.textOf(c.menu().props.anchor), /待切换：创造模式/)
+  assert.match(c.menu().props.anchor.props.title, /已排队/)
+  c.emit('agent-preset/selected', 'session-1', 'cordis')
+  assert.doesNotMatch(c.textOf(c.menu().props.anchor), /待切换：/)
 })
 
 test('Host errors use native Toast without changing the preset', async () => {
@@ -172,4 +188,67 @@ test('custom menu and confirmation styling have been eliminated', () => {
   assert.match(source, /React.createElement\(Menu, \{/)
   assert.doesNotMatch(source, /React.createElement\(MenuSurface|\.dcm-panel\s*\{|\.dcm-confirm\s*\{|\.dcm-row\s*\{/)
   assert.doesNotMatch(source, /Tool calls made under the previous mode/)
+})
+
+test('deferred recompose error clears pending state and uses the native Toast', async () => {
+  const c = makeClient({ running: true, result: {
+    ok: true, value: { result: { kind: 'success',
+      text: 'Queued preset switch to cordis until the Agent becomes idle.' } },
+  } })
+  c.menu().props.anchor.props.onClick()
+  await tick()
+  c.menu().props.onSelect('cordis')
+  await tick()
+  c.emit('api-session/error', 'session-1', '[convo-mode] Could not switch to cordis: bad preset')
+  assert.equal(c.toast().props.text, 'Could not switch to cordis: bad preset')
+  assert.doesNotMatch(c.textOf(c.menu().props.anchor), /待切换：/)
+})
+
+test('a queued switch can be superseded and switched back to the current mode', async () => {
+  const c = makeClient({ running: true, result: {
+    ok: true, value: { result: { kind: 'success',
+      text: 'Queued preset switch to cordis until the Agent becomes idle.' } },
+  } })
+  c.menu().props.anchor.props.onClick()
+  await tick()
+  c.menu().props.onSelect('cordis')
+  await tick()
+  assert.match(c.textOf(c.menu().props.anchor), /待切换/)
+  c.menu().props.anchor.props.onClick()
+  await tick()
+  assert.ok(c.menu().props.items.every(item => !item.disabled))
+  c.menu().props.onSelect('ptc')
+  await tick()
+  assert.equal(c.calls.commands.length, 2, 'selecting the active mode can cancel queued target')
+})
+
+test('pending state follows the DSH language and cleanly unsubscribes on disposal', async () => {
+  const c = makeClient({ running: true, result: {
+    ok: true, value: { result: { kind: 'success',
+      text: 'Queued preset switch to cordis until the Agent becomes idle.' } },
+  } })
+  c.menu().props.anchor.props.onClick()
+  await tick()
+  c.menu().props.onSelect('cordis')
+  await tick()
+  c.setLocale('en')
+  assert.match(c.textOf(c.menu().props.anchor), /Pending: Creator mode/)
+  c.cleanup()
+  assert.ok(c.calls.removed.includes('agent-preset/selected'))
+  assert.ok(c.calls.removed.includes('api-session/error'))
+  assert.ok(c.calls.removed.includes('api-session/removed'))
+})
+
+test('a stale failure notification cannot clear a newer queued mode', async () => {
+  const c = makeClient({ running: true, result: {
+    ok: true, value: { result: { kind: 'success',
+      text: 'Queued preset switch to cordis until the Agent becomes idle.' } },
+  } })
+  c.menu().props.anchor.props.onClick()
+  await tick()
+  c.menu().props.onSelect('cordis')
+  await tick()
+  c.emit('api-session/error', 'session-1', '[convo-mode] Could not switch to ptc: old failure')
+  assert.match(c.textOf(c.menu().props.anchor), /待切换：创造模式/)
+  assert.equal(c.toast(), undefined)
 })

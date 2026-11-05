@@ -10,20 +10,32 @@ The plugin now renders the **official `Menu` component** from `@deepseek-ai/dsh-
 
 Open the menu from the current conversation's header. Click an available mode to switch **directly**, without a separate title, close button or confirmation step. The menu aligns at the left edge of the button, automatically fits the viewport, and preserves DSH's light/dark theme.
 
-The GUI displays Host refusals with the native `Toast`, rather than a custom popup error strip. When the Agent has an active turn, menu choices are disabled.
+The GUI uses the native `Toast` for failures. **You can select another mode even while a Turn is running.** The current mode remains selected and the header shows `待切换：创造模式` / `Pending: Creator mode` until the Host confirms that the new mode is active. Choosing again replaces the queued target; choosing the already-active mode cancels an unstarted queued change.
 
 ## Switching semantics
 
-The official `agentPresets.select()` RPC refuses switching after a session has started (the nonblank-session lock). The plugin uses the lower-level `agentPresets.recompose()` to permit changing presets **between turns**, then appends `agent-preset/selected` so resume/fork reconstructs the latest preset. It does **not** interrupt in-flight tool calls or switch while a turn is running; the plugin Host command independently refuses that case.
+The official `agentPresets.select()` RPC refuses switching after a session has started (the nonblank-session lock). The plugin uses the lower-level `agentPresets.recompose()` with a safety boundary:
+
+1. A mode choice in an active Turn **queues immediately**, with no interruption or mid-tool-call scope replacement.
+2. On the next `agent/status: idle` transition, the Host calls the official `agent.runMaintenance()` API. This synchronously reserves the true idle phase **before** awaiting `recompose()`; any new waking input is held until maintenance releases it. If another maintenance task owns the phase, the plugin waits for `whenIdle()` and retries.
+3. Only after `recompose()` succeeds does the Host append `agent-preset/selected`. The forwarded selection event clears the pending indicator; resume/fork reconstructs the new mode.
+4. Deferred failures use DSH's already-forwarded `api-session/error` event, which clears the pending indicator and shows a native error Toast. A stale failure from an earlier selection never clears a later pending target.
+
+**Timing:** The queued switch waits for *true Agent idleness*, not merely a Step boundary. If other Turns are already queued, it may not take effect until those complete. There is no built-in timeout or forced cancellation. Only the latest request that has not begun maintenance is retained; a switch already executing cannot safely be interrupted, but a newer choice applies afterward.
+
+**Lifetime:** Pending requests are held in Host memory, not durably logged. A DSH Host process restart or plugin unload discards unapplied requests. Select the mode again after restarting if needed.
+
+Subagent-owned sessions remain ineligible for this operation. No custom HTTP endpoint or new Remote forwarding list is required.
 
 Changing modes preserves the session ID, workspace and transcript. Old tool calls may render differently after a tool catalog change.
 
 ## Implementation
 
 - `lib/client.js` shadows the built-in `conversation.session.header.actions` / `agent-preset` slot at `priority: -10`. It reads the preset roster from `ctx.remote.agentPresets.list()`, and calls `ctx.remote.commands.execute(sessionId, '/convo-mode <preset-id>', [])` after a selection.
-- `lib/index.js` registers the `/convo-mode` Host command, checks running turns and subagent ownership, calls `agentPresets.recompose(agent.ctx, id)`, and logs the official selection event.
+- `lib/index.js` registers the `/convo-mode` Host command, validates the target, queues changes while running, and reserves an idle maintenance phase for `agentPresets.recompose(agent.ctx, id)`. It rejects subagent-owned sessions and logs the official selection event only on success.
 - No custom HTTP route, CSS menu material, independent dropdown component, or artificial system reminder.
 - Built-in names/descriptions use DSH's `settings.agentPreset` locale dictionary. The menu tracks DSH's selected UI language (not `navigator.language`); custom preset metadata displays verbatim.
+- The Client subscribes to `agent-preset/selected` and `api-session/error` to reconcile pending switches, including deferred outcomes.
 - The `Menu` library is in the DSH browser platform's shared module table, so no extra `dsh.client.external` declaration or local bundling is required.
 
 ## Installation
