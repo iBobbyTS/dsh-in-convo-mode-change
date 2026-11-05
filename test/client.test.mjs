@@ -47,7 +47,8 @@ function makeClient({ result = { ok: true, value: { commandId: '1', result: { ki
     document, navigator: { language: 'en-US' }, Node: class Node {}, console }
   vm.createContext(sandbox)
   vm.runInContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), sandbox)
-  const mod = bundle.factory(x => { if (x === 'react') return React; throw Error(x) })
+  const MenuSurface = function MenuSurface() {}
+  const mod = bundle.factory(x => { if (x === 'react') return React; if (x === '@deepseek-ai/dsh-client-ui-primitives') return { MenuSurface }; throw Error(x) })
   const remote = {
     agentPresets: { list: async () => ({ ok: true, value: { presets: [
       { id: 'standard', name: 'Standard mode' }, { id: 'ptc', name: 'PTC mode' },
@@ -74,7 +75,7 @@ function makeClient({ result = { ok: true, value: { commandId: '1', result: { ki
   }
   const textOf = node => typeof node === 'string' ? node : !node || typeof node !== 'object'
     ? '' : (node.children || []).map(textOf).join('')
-  return { mod, calls, dispose, render, find, textOf, setLocale: id => locale.setLocale(id) }
+  return { mod, calls, dispose, render, find, textOf, MenuSurface, setLocale: id => locale.setLocale(id) }
 }
 async function tick() { await new Promise(resolve => setImmediate(resolve)) }
 
@@ -149,4 +150,20 @@ test('changing DSH language updates open menu and confirmation', async () => {
   other.props.onClick()
   assert.match(c.textOf(c.render()), /Switch conversation mode/)
   assert.doesNotMatch(c.textOf(c.render()), /Tool calls made under the previous mode/)
+})
+
+test('popup uses the shared MenuSurface material and macOS backing instead of a translucent raw div', async () => {
+  const c = makeClient({ language: 'zh' })
+  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
+  await tick()
+  const panel = c.find(c.render(), e => e.props.className === 'dcm-panel')
+  assert.equal(panel.type, c.MenuSurface)
+  assert.equal(panel.props.role, 'menu')
+  const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const css = source.split('\n').find(line => line.includes("'.dcm-panel {")) ?? ''
+  assert.ok(css.includes('left: 0; right: auto;'), 'popup remains anchored to trigger left edge')
+  assert.ok(css.includes('box-shadow: var(--dsw-elevation-prominent)'), 'official elevation is reused')
+  assert.doesNotMatch(css, /background\s*:|backdrop-filter\s*:|--dsw-specific-menu|--dsw-menu-surface-fill/)
+  assert.ok(source.includes("require('@deepseek-ai/dsh-client-ui-primitives').MenuSurface"))
+  assert.ok(c.find(panel, e => e.props.role === 'menuitemradio'), 'existing switching UI remains')
 })

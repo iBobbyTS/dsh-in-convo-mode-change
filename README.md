@@ -22,6 +22,12 @@ The menu disables mode selection while a turn is active. The host independently 
 
 The user interacts with the **GUI only**. The internal command uses DSH's existing authenticated command transport. DSH may show a normal command lifecycle entry in the transcript. The GUI reads the **settled command outcome**, not merely submission acceptance, and reports Host errors.
 
+## Native menu material (DSH 0.2.1-rc.5)
+
+The conversation-header dropdown now renders through DSH's shared `MenuSurface` primitive from `@deepseek-ai/dsh-client-ui-primitives` (the same underlying menu surface as the built-in session actions menu). `MenuSurface` owns the translucent surface, `backdrop-filter`, and an aligned opaque backing portal on macOS; using the old `--dsw-specific-menu` color directly on a hand-built `div` allowed chat text to bleed through.
+
+The plugin owns only layout, a 320px left-aligned card, and the official elevated shadow tokens; it intentionally does not override the menu's background, backdrop, or radius. Preset descriptions, confirmations, language switching and native command transport are unchanged.
+
 ## Localization
 
 The GUI uses DSH's native `locale` service, not the browser's `navigator.language`. Changing DSH's language preference updates the header and open mode menu without a reload. Built-in preset labels and descriptions reuse DSH's official `settings.agentPreset` dictionaries. Buttons and confirmations follow DSH's locale fallback rules. Custom preset names and descriptions remain the user-authored metadata and are not automatically translated.
@@ -36,6 +42,7 @@ The redundant warning about next-turn activation and historical tool rendering w
 - The built-in PTC preset uses ID `ptc`, not `code`.
 - The Host uses `commands.register()` with native `commands.execute()`, and DSH's `agentPresets.recompose()`.
 - The existing slot override must retain a priority lower than the built-in `agent-preset` label's default priority.
+- The menu uses the shell-seeded `@deepseek-ai/dsh-client-ui-primitives` `MenuSurface` component. No `dsh.client.external` declaration is needed because it is part of `PLATFORM_MODULES`.
 - DSH's active locale and built-in preset descriptions come from the native `locale` service.
 
 These changes were cross-checked against upstream source tag `dsh-v0.2.1-rc.5`. A full Desktop/Web end-to-end test still requires a running DSH installation.

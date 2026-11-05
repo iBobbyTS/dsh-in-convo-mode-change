@@ -1,7 +1,7 @@
 {
   "name": "dsh-in-convo-mode-change",
-  "version": "1.1.1",
-  "description": "Switch the DSH session agent preset from the conversation header, using native commands and locale services (0.2.1-rc.5).",
+  "version": "1.1.2",
+  "description": "GUI session preset switching with DSH native command, locale, and MenuSurface primitives (0.2.1-rc.5).",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -25,7 +25,8 @@
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-agent-preset",
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives"
       ],
       "platform": "web"
     }
