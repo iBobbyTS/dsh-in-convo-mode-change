@@ -3,167 +3,173 @@ import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { readFileSync } from 'node:fs'
 
-function makeClient({ result = { ok: true, value: { commandId: '1', result: { kind: 'success' } } }, running = false, language = 'zh' } = {}) {
-  const calls = { remote: [], seat: null, removed: [], localeNotifications: 0 }
-  let snapshot = { active: language, revision: 0 }
-  const listeners = new Set()
-  const names = {
+function makeClient({ language = 'zh', running = false, result = { ok: true, value: { result: { kind: 'success' } } }, roster } = {}) {
+  let bundle
+  const calls = { commands: [], removed: [], localeChanges: 0 }
+  let active = language
+  let revision = 0
+  const locales = new Set()
+  const dictionary = {
     zh: { Standard: '标准模式', Ptc: 'PTC 模式', Minimal: '极简模式', Cordis: '创造模式' },
     en: { Standard: 'Standard mode', Ptc: 'PTC mode', Minimal: 'Minimal mode', Cordis: 'Creator mode' },
   }
   const locale = {
-    bind(ns) {
-      assert.equal(ns, 'settings.agentPreset')
+    bind(name) {
+      assert.equal(name, 'settings.agentPreset')
       return key => {
         const match = /^preset(Standard|Ptc|Minimal|Cordis)(Name|Description)$/.exec(key)
-        if (!match) return key
-        return match[2] === 'Name' ? names[snapshot.active][match[1]] : 'Localized description (' + snapshot.active + ')'
+        return match
+          ? match[2] === 'Name'
+            ? dictionary[active][match[1]]
+            : 'Description for ' + match[1] + ' (' + active + ')'
+          : key === 'noDescription' ? 'No description' : key
       }
     },
-    resolveText(dict) { return dict[snapshot.active] ?? dict.en },
-    getSnapshot() { return snapshot },
-    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn) },
-    setLocale(next) {
-      snapshot = { active: next, revision: snapshot.revision + 1 }
-      for (const listener of listeners) listener()
-    },
+    resolveText: values => values[active] ?? values.en,
+    getSnapshot: () => ({ active, revision }),
+    subscribe(fn) { locales.add(fn); return () => locales.delete(fn) },
+    switchTo(id) { active = id; revision++; for (const fn of locales) fn() },
   }
-  let bundle
   const React = {
+    Fragment: Symbol('Fragment'),
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat() }),
-    useState: s => [s, () => {}],
+    useState: value => [value, () => {}],
+    useEffect: () => {},
     useSyncExternalStore(subscribe, getSnapshot) {
-      if (!calls.localeDispose) calls.localeDispose = subscribe(() => { calls.localeNotifications++ })
+      if (locales.size === 0) subscribe(() => { calls.localeChanges++ })
       return getSnapshot()
     },
-    useEffect: () => {},
-    useRef: () => ({ current: null }),
   }
+  function Menu() {}
+  function Toast() {}
+  function IconAgentPresetOutlineRegular() {}
+  function IconChevronDownOutlineRegular() {}
+  function IconWarningOutlineRegular() {}
+  const primitives = { Menu, Toast, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, IconWarningOutlineRegular }
   const document = {
-    head: { appendChild(el) { el.parentNode = this }, removeChild() {} },
+    head: { appendChild(el) { el.parentNode = this }, removeChild() { calls.removed.push('style') } },
     createElement: () => ({ textContent: '', parentNode: null }),
   }
-  const sandbox = { window: { __ModuleLoader__: { load: x => { bundle = x } } },
-    document, navigator: { language: 'en-US' }, Node: class Node {}, console }
-  vm.createContext(sandbox)
-  vm.runInContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), sandbox)
-  const MenuSurface = function MenuSurface() {}
-  const mod = bundle.factory(x => { if (x === 'react') return React; if (x === '@deepseek-ai/dsh-client-ui-primitives') return { MenuSurface }; throw Error(x) })
-  const remote = {
-    agentPresets: { list: async () => ({ ok: true, value: { presets: [
-      { id: 'standard', name: 'Standard mode' }, { id: 'ptc', name: 'PTC mode' },
-      { id: 'cordis', name: 'Creator mode' }, { id: 'bad', broken: 'invalid' },
+  vm.runInContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'),
+    vm.createContext({ window: { __ModuleLoader__: { load(entry) { bundle = entry } } },
+      navigator: { language: 'en-US' }, document, console }))
+  const client = bundle.factory(id => {
+    if (id === 'react') return React
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') return primitives
+    throw new Error('Unexpected module ' + id)
+  })
+  const remotes = {
+    agentPresets: { list: async () => ({ ok: true, value: { presets: roster ?? [
+      { id: 'standard' }, { id: 'ptc' }, { id: 'minimal' }, { id: 'cordis' },
+      { id: 'broken', broken: 'invalid' },
     ] } }) },
-    commands: { execute: async (...args) => { calls.remote.push(args); return result } },
+    commands: { execute: async (...args) => { calls.commands.push(args); return result } },
   }
   const slots = {
-    inject(seat, factory) { calls.seat = seat; calls.factory = factory; return () => calls.removed.push('inject') },
-    register(options, component) { calls.options = options; calls.component = component; return () => calls.removed.push('register') },
+    inject(name, apply) { calls.seat = name; calls.register = apply; return () => calls.removed.push('slot') },
+    register(options, component) { calls.options = options; calls.component = component; return () => {} },
   }
   const ctx = {
-    get(k) { return k === 'remote' ? remote : k === 'slots' ? slots : k === 'locale' ? locale : undefined },
+    get(name) { return name === 'slots' ? slots : name === 'remote' ? remotes : name === 'locale' ? locale : undefined },
     effect(fn) { const dispose = fn(); return () => dispose?.() },
   }
-  const dispose = mod.apply(ctx)
-  calls.factory()
-  const render = () => calls.component({ sessionId: 's1',
-    useSessions: selector => selector({ byId: { s1: { projectionValues: { agentPreset: 'ptc' }, running } } }) })
-  const find = (tree, pred) => {
-    if (!tree || typeof tree !== 'object') return undefined
-    if (pred(tree)) return tree
-    for (const c of tree.children || []) { const hit = find(c, pred); if (hit) return hit }
+  const cleanup = client.apply(ctx)
+  calls.register()
+  const render = () => calls.component({ sessionId: 'session-1',
+    useSessions: fn => fn({ byId: { 'session-1': {
+      projectionValues: { agentPreset: 'ptc' }, running,
+    } } }),
+  })
+  function find(node, match) {
+    if (!node || typeof node !== 'object') return undefined
+    if (match(node)) return node
+    for (const child of node.children || []) {
+      const found = find(child, match)
+      if (found) return found
+    }
   }
-  const textOf = node => typeof node === 'string' ? node : !node || typeof node !== 'object'
-    ? '' : (node.children || []).map(textOf).join('')
-  return { mod, calls, dispose, render, find, textOf, MenuSurface, setLocale: id => locale.setLocale(id) }
+  const textOf = node => typeof node === 'string' ? node
+    : node === null || typeof node !== 'object' ? '' : (node.children || []).map(textOf).join('')
+  return {
+    client, calls, cleanup, Menu, Toast, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular,
+    menu: () => find(render(), node => node.type === Menu),
+    toast: () => find(render(), node => node.type === Toast),
+    textOf, setLocale: id => locale.switchTo(id),
+  }
 }
-async function tick() { await new Promise(resolve => setImmediate(resolve)) }
+const tick = () => new Promise(resolve => setImmediate(resolve))
 
-test('rc5 slot and service bindings', () => {
+test('header uses the same native Menu and icons as official AgentPresetSeat', async () => {
   const c = makeClient()
   assert.equal(c.calls.seat, 'conversation.session.header.actions')
   assert.equal(c.calls.options.id, 'agent-preset')
   assert.equal(c.calls.options.priority, -10)
-  assert.deepEqual(Array.from(c.mod.inject), ['slots', 'remote', 'remote.agentPresets', 'remote.commands', 'locale'])
-  assert.ok(c.find(c.render(), e => e.props.className === 'dcm-trigger'))
-  c.dispose()
-  assert.ok(c.calls.removed.includes('inject'))
+  assert.equal(c.menu().props.portal, true)
+  assert.equal(c.menu().props.align, 'start')
+  assert.equal(c.menu().props.selectedId, 'ptc')
+  assert.equal(c.menu().props.anchor.children[0].type, c.IconAgentPresetOutlineRegular)
+  assert.equal(c.menu().props.anchor.children[2].type, c.IconChevronDownOutlineRegular)
+  c.menu().props.anchor.props.onClick()
+  await tick()
+  assert.equal(c.menu().props.open, true)
+  assert.deepEqual(Array.from(c.menu().props.items, item => item.id), ['standard', 'ptc', 'minimal', 'cordis'])
+  assert.equal(c.menu().props.items[0].label.props.className, 'dcm-item')
+  assert.equal(c.menu().props.items[0].label.children[0].props.className, 'dcm-itemName')
+  assert.equal(c.menu().props.items[0].label.children[1].props.className, 'dcm-itemDesc')
+  c.cleanup()
+  assert.ok(c.calls.removed.includes('style'))
 })
 
-test('GUI uses commands.execute instead of custom fetch', async () => {
+test('selecting a mode immediately uses the original Host command without confirmation', async () => {
   const c = makeClient()
-  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
+  c.menu().props.anchor.props.onClick()
   await tick()
-  const mode = c.find(c.render(), e => e.props.role === 'menuitemradio' && e.props['aria-checked'] === false)
-  assert.ok(mode, 'preset list has other options')
-  mode.props.onClick()
-  const confirm = c.find(c.render(), e => e.props.className === 'dcm-btn dcm-btnPrimary')
-  assert.ok(confirm, 'confirmation GUI appears')
-  confirm.props.onClick()
+  c.menu().props.onSelect('cordis')
   await tick()
-  assert.equal(c.calls.remote.length, 1)
-  assert.equal(c.calls.remote[0][0], 's1')
-  assert.match(c.calls.remote[0][1], /^\/convo-mode (?:standard|cordis)$/)
-  assert.equal(c.calls.remote[0][2].length, 0)
+  assert.equal(c.calls.commands.length, 1)
+  assert.equal(c.calls.commands[0][0], 'session-1')
+  assert.equal(c.calls.commands[0][1], '/convo-mode cordis')
+  assert.deepEqual(Array.from(c.calls.commands[0][2]), [])
+  assert.equal(c.menu().props.open, false)
 })
 
-test('host refusal remains visible in the GUI', async () => {
-  const c = makeClient({ result: { ok: true, value: { commandId: '2', result: { kind: 'error', text: 'turn-running' } } } })
-  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
-  await tick()
-  c.find(c.render(), e => e.props.role === 'menuitemradio' && e.props['aria-checked'] === false).props.onClick()
-  c.find(c.render(), e => e.props.className === 'dcm-btn dcm-btnPrimary').props.onClick()
-  await tick()
-  assert.equal(c.find(c.render(), e => e.props.className === 'dcm-error')?.children[0], 'turn-running')
-})
-
-test('running turn disables choices', async () => {
+test('running turns disable native menu options and cannot switch', async () => {
   const c = makeClient({ running: true })
-  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
+  c.menu().props.anchor.props.onClick()
   await tick()
-  assert.equal(c.find(c.render(), e => e.props.role === 'menuitemradio').props.disabled, true)
+  assert.ok(c.menu().props.items.every(item => item.disabled))
+  c.menu().props.onSelect('cordis')
+  await tick()
+  assert.equal(c.calls.commands.length, 0)
 })
 
-test('DSH Chinese setting overrides English browser and caption is gone', async () => {
-  const c = makeClient({ language: 'zh' }) // sandbox navigator.language is en-US
-  const trigger = c.find(c.render(), e => e.props.className === 'dcm-trigger')
-  assert.match(c.textOf(trigger), /PTC 模式/)
-  trigger.props.onClick()
+test('Host errors use native Toast without changing the preset', async () => {
+  const c = makeClient({ result: { ok: true, value: { result: { kind: 'error', text: 'turn-running' } } } })
+  c.menu().props.anchor.props.onClick()
   await tick()
-  const menu = c.find(c.render(), e => e.props.className === 'dcm-panel')
-  assert.match(c.textOf(menu), /对话模式/)
-  assert.match(c.textOf(menu), /标准模式/)
-  assert.match(c.textOf(menu), /创造模式/)
-  assert.equal(c.find(menu, e => e.props.className === 'dcm-caption'), undefined)
-  assert.doesNotMatch(c.textOf(menu), /Applies from the next turn|Tool calls made under the previous mode/)
+  c.menu().props.onSelect('cordis')
+  await tick()
+  assert.equal(c.toast().props.text, 'turn-running')
+  assert.equal(c.toast().props.holdMs, 8000)
+  assert.equal(c.menu().props.selectedId, 'ptc')
 })
 
-test('changing DSH language updates open menu and confirmation', async () => {
-  const c = makeClient({ language: 'zh' })
-  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
+test('DSH language changes localize native option labels and custom metadata is preserved', async () => {
+  const c = makeClient({ roster: [{ id: 'ptc' }, { id: 'custom', name: 'Research', description: 'Source analysis' }] })
+  assert.match(c.textOf(c.menu().props.anchor), /PTC 模式/)
+  c.menu().props.anchor.props.onClick()
   await tick()
+  assert.match(c.textOf(c.menu().props.items[1].label), /Source analysis/)
   c.setLocale('en')
-  assert.ok(c.calls.localeNotifications > 0)
-  assert.match(c.textOf(c.render()), /PTC mode/)
-  assert.match(c.textOf(c.render()), /Conversation mode/)
-  const other = c.find(c.render(), e => e.props.role === 'menuitemradio' && e.props['aria-checked'] === false)
-  other.props.onClick()
-  assert.match(c.textOf(c.render()), /Switch conversation mode/)
-  assert.doesNotMatch(c.textOf(c.render()), /Tool calls made under the previous mode/)
+  assert.ok(c.calls.localeChanges > 0)
+  assert.match(c.textOf(c.menu().props.anchor), /PTC mode/)
+  assert.match(c.textOf(c.menu().props.items[1].label), /Research/)
 })
 
-test('popup uses the shared MenuSurface material and macOS backing instead of a translucent raw div', async () => {
-  const c = makeClient({ language: 'zh' })
-  c.find(c.render(), e => e.props.className === 'dcm-trigger').props.onClick()
-  await tick()
-  const panel = c.find(c.render(), e => e.props.className === 'dcm-panel')
-  assert.equal(panel.type, c.MenuSurface)
-  assert.equal(panel.props.role, 'menu')
+test('custom menu and confirmation styling have been eliminated', () => {
   const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  const css = source.split('\n').find(line => line.includes("'.dcm-panel {")) ?? ''
-  assert.ok(css.includes('left: 0; right: auto;'), 'popup remains anchored to trigger left edge')
-  assert.ok(css.includes('box-shadow: var(--dsw-elevation-prominent)'), 'official elevation is reused')
-  assert.doesNotMatch(css, /background\s*:|backdrop-filter\s*:|--dsw-specific-menu|--dsw-menu-surface-fill/)
-  assert.ok(source.includes("require('@deepseek-ai/dsh-client-ui-primitives').MenuSurface"))
-  assert.ok(c.find(panel, e => e.props.role === 'menuitemradio'), 'existing switching UI remains')
+  assert.match(source, /var Menu = primitives.Menu/)
+  assert.match(source, /React.createElement\(Menu, \{/)
+  assert.doesNotMatch(source, /React.createElement\(MenuSurface|\.dcm-panel\s*\{|\.dcm-confirm\s*\{|\.dcm-row\s*\{/)
+  assert.doesNotMatch(source, /Tool calls made under the previous mode/)
 })

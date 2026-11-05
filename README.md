@@ -1,67 +1,42 @@
 # dsh-in-convo-mode-change
 
-Change an **existing conversation's agent preset** in DeepSeek Harness without opening a new session. The session-header preset label becomes a GUI menu for **Standard**, **PTC**, **Minimal**, **Creator**, and custom presets.
+Switch the **Agent Preset** of an existing DeepSeek Harness conversation through the session header. Supports Standard, PTC, Minimal, Creator, and configured custom presets.
 
-Target: **DSH 0.2.1-rc.5**. This repo ships prebuilt JavaScript; no local build is needed when installing from GitHub.
+**DSH target:** 0.2.1-rc.5. Prebuilt JavaScript is committed; installation from GitHub does not require a local build.
 
-## Behavior
+## UI: same native selector as DSH
 
-1. Open an existing conversation and click the agent-preset label in its **header**.
-2. Select a healthy preset and confirm.
-3. The change applies to the **next turn**. The session ID, workspace and existing transcript are retained.
+The plugin now renders the **official `Menu` component** from `@deepseek-ai/dsh-client-ui-primitives`, just as DSH's own new-session `AgentPresetSeat` does. This provides native menu rows, the current-mode checkmark, keyboard navigation, focus return, portal positioning, scrolling and macOS backing. The option label layout matches the official seat's 13px/20px title, 12px/16px description, 2px gap and 280px maximum description width. The preset icon, chevron and button treatment use the same shared primitives and theme tokens.
 
-The menu disables mode selection while a turn is active. The host independently refuses changing presets during a turn, rejects subagent-owned sessions and serializes simultaneous switches. The official `agent-preset/selected` event persists the selection for resume/fork, and its Session projection updates the current label.
+Open the menu from the current conversation's header. Click an available mode to switch **directly**, without a separate title, close button or confirmation step. The menu aligns at the left edge of the button, automatically fits the viewport, and preserves DSH's light/dark theme.
 
-**Caveat:** Tool calls made under the old preset may render differently after changing the current tool catalog. Never change a preset while a tool call is in flight.
+The GUI displays Host refusals with the native `Toast`, rather than a custom popup error strip. When the Agent has an active turn, menu choices are disabled.
 
-## Architecture (no custom HTTP route)
+## Switching semantics
 
-- `lib/client.js`: replaces the built-in `conversation.session.header.actions` slot cell (`id: agent-preset`, `priority: -10`). Loads presets through `ctx.remote.agentPresets.list()` and invokes `ctx.remote.commands.execute(sessionId, '/convo-mode <preset-id>', [])`.
-- `lib/index.js`: registers the Host's native `/convo-mode` command. The command handler uses `agentPresets.recompose(agent.ctx, id)` and appends `agent-preset/selected` after success.
-- No custom `webServer` routes, HTTP body parsers, direct browser `fetch` calls or `@deepseek-ai/dsh-agent-presets` exception imports.
+The official `agentPresets.select()` RPC refuses switching after a session has started (the nonblank-session lock). The plugin uses the lower-level `agentPresets.recompose()` to permit changing presets **between turns**, then appends `agent-preset/selected` so resume/fork reconstructs the latest preset. It does **not** interrupt in-flight tool calls or switch while a turn is running; the plugin Host command independently refuses that case.
 
-The user interacts with the **GUI only**. The internal command uses DSH's existing authenticated command transport. DSH may show a normal command lifecycle entry in the transcript. The GUI reads the **settled command outcome**, not merely submission acceptance, and reports Host errors.
+Changing modes preserves the session ID, workspace and transcript. Old tool calls may render differently after a tool catalog change.
 
-## Native menu material (DSH 0.2.1-rc.5)
+## Implementation
 
-The conversation-header dropdown now renders through DSH's shared `MenuSurface` primitive from `@deepseek-ai/dsh-client-ui-primitives` (the same underlying menu surface as the built-in session actions menu). `MenuSurface` owns the translucent surface, `backdrop-filter`, and an aligned opaque backing portal on macOS; using the old `--dsw-specific-menu` color directly on a hand-built `div` allowed chat text to bleed through.
+- `lib/client.js` shadows the built-in `conversation.session.header.actions` / `agent-preset` slot at `priority: -10`. It reads the preset roster from `ctx.remote.agentPresets.list()`, and calls `ctx.remote.commands.execute(sessionId, '/convo-mode <preset-id>', [])` after a selection.
+- `lib/index.js` registers the `/convo-mode` Host command, checks running turns and subagent ownership, calls `agentPresets.recompose(agent.ctx, id)`, and logs the official selection event.
+- No custom HTTP route, CSS menu material, independent dropdown component, or artificial system reminder.
+- Built-in names/descriptions use DSH's `settings.agentPreset` locale dictionary. The menu tracks DSH's selected UI language (not `navigator.language`); custom preset metadata displays verbatim.
+- The `Menu` library is in the DSH browser platform's shared module table, so no extra `dsh.client.external` declaration or local bundling is required.
 
-The plugin owns only layout, a 320px left-aligned card, and the official elevated shadow tokens; it intentionally does not override the menu's background, backdrop, or radius. Preset descriptions, confirmations, language switching and native command transport are unchanged.
+## Installation
 
-## Localization
-
-The GUI uses DSH's native `locale` service, not the browser's `navigator.language`. Changing DSH's language preference updates the header and open mode menu without a reload. Built-in preset labels and descriptions reuse DSH's official `settings.agentPreset` dictionaries. Buttons and confirmations follow DSH's locale fallback rules. Custom preset names and descriptions remain the user-authored metadata and are not automatically translated.
-
-The redundant warning about next-turn activation and historical tool rendering was removed from the menu and confirmation GUI. The caveat is still documented above for developers.
-
-## DSH 0.2.1-rc.5 compatibility
-
-- `agentPresets.list()` uses the native `{ ok, value }` Remote result, not the obsolete `connection.api.agentPresets.list({})`.
-- The session's active preset lives at `useSessions(...).byId[sessionId].projectionValues.agentPreset`, not the former `agentPreset` shortcut.
-- Updates use the official `agent-preset/selected` Session projection. No `sessions.noteAgentPreset()` calls.
-- The built-in PTC preset uses ID `ptc`, not `code`.
-- The Host uses `commands.register()` with native `commands.execute()`, and DSH's `agentPresets.recompose()`.
-- The existing slot override must retain a priority lower than the built-in `agent-preset` label's default priority.
-- The menu uses the shell-seeded `@deepseek-ai/dsh-client-ui-primitives` `MenuSurface` component. No `dsh.client.external` declaration is needed because it is part of `PLATFORM_MODULES`.
-- DSH's active locale and built-in preset descriptions come from the native `locale` service.
-
-These changes were cross-checked against upstream source tag `dsh-v0.2.1-rc.5`. A full Desktop/Web end-to-end test still requires a running DSH installation.
-
-## Install
-
-For the DSH Desktop profile:
+Desktop profile:
 
 ```sh
 dsh plugin --profile desktop add "git+https://github.com/iBobbyTS/dsh-in-convo-mode-change.git"
 ```
 
-For the standalone Web profile, substitute `--profile web`. Restart the corresponding DSH process and reload the UI. The `cordis.patch.yml` bundle patch mounts the Host component automatically. Local development:
+For a standalone Web profile, replace `desktop` with `web`. Restart the corresponding DSH process and reload the UI.
 
-```sh
-dsh plugin --profile web add link:/absolute/path/to/dsh-in-convo-mode-change
-```
-
-Uninstall:
+Removal:
 
 ```sh
 dsh plugin --profile desktop remove dsh-in-convo-mode-change
@@ -73,7 +48,7 @@ dsh plugin --profile desktop remove dsh-in-convo-mode-change
 bash test/run-tests.sh
 ```
 
-Host and client unit tests have no external dependencies. The real `SlotCore` regression suite (`test/slots.test.mjs`) runs when `@deepseek-ai/dsh-client-ui-slots` is installed; otherwise the runner explicitly skips that optional integration check.
+Client and Host tests use mocked services; the optional real SlotCore test requires the installed DSH UI slots package. This change has been source-checked against DSH 0.2.1-rc.5, but full Desktop UI behavior requires a running application test.
 
 ## License
 

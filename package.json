@@ -1,7 +1,7 @@
 {
   "name": "dsh-in-convo-mode-change",
-  "version": "1.1.2",
-  "description": "GUI session preset switching with DSH native command, locale, and MenuSurface primitives (0.2.1-rc.5).",
+  "version": "1.2.0",
+  "description": "In-conversation Agent Preset switching using DSH's native Menu, commands and locale.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
