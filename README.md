@@ -2,7 +2,11 @@
 
 Switch an existing DeepSeek Harness conversation's Agent Preset from its header. Supports Standard, PTC, Minimal, Creator and configured custom presets, using DSH's native selector and failure Toasts.
 
-Compatibility was checked against DSH **0.2.2-rc.1** source with automated Host and Client tests. A running Desktop UI check remains separate. Prebuilt JavaScript is committed, so installation does not require a local build.
+Prebuilt JavaScript is committed, so installation does not require a local build.
+
+## Compatibility
+
+Verified: DSH 0.2.2-rc.1 (source review and automated checks); Desktop testing has not been completed.
 
 ## Install
 
