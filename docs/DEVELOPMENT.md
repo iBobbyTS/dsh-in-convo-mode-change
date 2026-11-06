@@ -15,8 +15,8 @@ Pending-request lifetime and user-visible scheduling limits are described in the
 
 ## Implementation
 
-- `lib/client.js` shadows the built-in `conversation.session.header.actions` / `agent-preset` slot at `priority: -10`. It reads the preset roster from `ctx.remote.agentPresets.list()`, and calls `ctx.remote.commands.execute(sessionId, '/convo-mode <preset-id>', [])` after a selection.
-- `lib/index.js` registers the `/convo-mode` Host command, validates the target, queues changes while running, and reserves an idle maintenance phase for `agentPresets.recompose(agent.ctx, id)`. It rejects subagent-owned sessions and logs the official selection event only on success.
+- `src/client.ts` (built as `lib/client.js`) shadows the built-in `conversation.session.header.actions` / `agent-preset` slot at `priority: -10`. It reads the preset roster from `ctx.remote.agentPresets.list()`, and calls `ctx.remote.commands.execute(sessionId, '/convo-mode <preset-id>', [])` after a selection.
+- `src/index.ts` (built as `lib/index.js`) registers the `/convo-mode` Host command, validates the target, queues changes while running, and reserves an idle maintenance phase for `agentPresets.recompose(agent.ctx, id)`. It rejects subagent-owned sessions and logs the official selection event only on success.
 - No custom HTTP route, CSS menu material, independent dropdown component, or artificial system reminder.
 - Built-in names/descriptions use DSH's `settings.agentPreset` locale dictionary. The menu tracks DSH's selected UI language (not `navigator.language`); custom preset metadata displays verbatim.
 - The Client subscribes to `agent-preset/selected` and `api-session/error` to reconcile pending switches, including deferred outcomes.
@@ -31,7 +31,14 @@ The header uses DSH's official `Menu` from `@deepseek-ai/dsh-client-ui-primitive
 From the source repository root:
 
 ```sh
-bash test/run-tests.sh
+pnpm install --frozen-lockfile
+pnpm check
 ```
 
-Host and Client tests mock their services. The runner also executes a real SlotCore check when `@deepseek-ai/dsh-client-ui-slots` is installed; otherwise it explicitly reports that check as skipped. Compatibility work must compare the target DSH maintenance, preset, command, forwarding and slot contracts. Report source checks, automated checks and running Desktop UI checks separately.
+Host and Client tests mock their services. The locked development dependencies include the target release SlotCore, so the standard check also runs its real registry regression. Compatibility work must compare the target DSH maintenance, preset, command, forwarding and slot contracts. Report source checks, automated checks and running Desktop UI checks separately.
+
+## Build and delivery
+
+Use Node 22.19+ on the Node 22 line or Node 24.11+ to run the pinned build tools, and the packageManager version in package.json. `pnpm typecheck` checks Host and Client separately; `pnpm build:runtime` regenerates committed `lib/` JS/maps. Edit `src/`, never generated `lib/`.
+
+`pnpm test` rebuilds a temporary candidate before running the regressions. `pnpm check:dist` independently rebuilds, compares the complete generated set, packs it and checks tarball installation/Host load and Client registration. `pnpm check` combines typecheck, tests and distribution checks using one candidate build. These checks do not change the working lib or a Desktop profile. Sources accompany maps; installation uses committed JS and has no compiler lifecycle hook.

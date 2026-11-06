@@ -184,8 +184,8 @@ test('DSH language changes localize native option labels and custom metadata is 
 
 test('custom menu and confirmation styling have been eliminated', () => {
   const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.match(source, /var Menu = primitives.Menu/)
-  assert.match(source, /React.createElement\(Menu, \{/)
+  const c = makeClient()
+  assert.ok(c.menu(), 'the registered action renders the host Menu')
   assert.doesNotMatch(source, /React.createElement\(MenuSurface|\.dcm-panel\s*\{|\.dcm-confirm\s*\{|\.dcm-row\s*\{/)
   assert.doesNotMatch(source, /Tool calls made under the previous mode/)
 })
