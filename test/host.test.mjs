@@ -105,6 +105,26 @@ test('idle selection reserves maintenance and records the official event', async
   assert.equal(h.released, true)
 })
 
+for (const header of [
+  { isSeeded: true },
+  { parentSession: 'fork-source', isSeeded: true, delegationDepth: 0 },
+]) {
+  test(`ordinary fork can switch preset (${header.parentSession ? 'recorded source' : 'independent header'})`, async () => {
+    const h = harness({ header })
+    assert.equal((await h.invoke('ptc')).kind, 'success')
+    assert.deepEqual(h.recomposed, ['ptc'])
+    assert.equal(h.appended[0]?.value.agentPreset, 'ptc')
+    h.cleanup()
+  })
+}
+
+test('a fork-backend subagent is still refused', async () => {
+  const h = harness({ origin: 'subagent', header: { parentSession: 'parent', isSeeded: true, delegationDepth: 1 } })
+  assert.match((await h.invoke('ptc')).text, /Subagent sessions cannot change preset/)
+  assert.deepEqual(h.recomposed, [])
+  h.cleanup()
+})
+
 test('running Turn queues immediately and recompose starts only at true idle', async () => {
   const h = harness({ running: true })
   const reply = await h.invoke('cordis')

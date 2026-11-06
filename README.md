@@ -25,7 +25,7 @@ The official `agentPresets.select()` RPC refuses switching after a session has s
 
 **Lifetime:** Pending requests are held in Host memory, not durably logged. A DSH Host process restart or plugin unload discards unapplied requests. Select the mode again after restarting if needed.
 
-Subagent-owned sessions remain ineligible for this operation. No custom HTTP endpoint or new Remote forwarding list is required.
+Subagent-owned sessions (`origin: "subagent"`) remain ineligible for this operation. Ordinary forks remain eligible, including older headers recording a source in `parentSession`. No custom HTTP endpoint or new Remote forwarding list is required.
 
 Changing modes preserves the session ID, workspace and transcript. Old tool calls may render differently after a tool catalog change.
 
